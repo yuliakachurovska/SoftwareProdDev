@@ -1,6 +1,7 @@
 package com.example.dice
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.ImageView
 import androidx.activity.viewModels
 import androidx.appcompat.app.AppCompatActivity
@@ -40,8 +41,12 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        viewModel.buttonText.observe(this) { text ->
+            binding.rollButton.text = text
+        }
+
         viewModel.isRolling.observe(this) { isRolling ->
-            binding.rollButton.isEnabled = !isRolling
+            Log.d("DiceCoroutines", "Стан обертання isRolling = $isRolling")
         }
 
         binding.rollButton.setOnClickListener {
