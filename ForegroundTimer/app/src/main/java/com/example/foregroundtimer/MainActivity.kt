@@ -1,10 +1,14 @@
-package com.example.foregroundtimer // <-- ЗАЛИШ СВІЙ ПАКЕТ
+package com.example.foregroundtimer
 
 import android.Manifest
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -29,16 +33,77 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private val _timerFlow = MutableStateFlow(0)
+    private val timerFlow: StateFlow<Int> = _timerFlow.asStateFlow()
+
+    private var myService: TimerForegroundService? = null
+    private var isBound = false
+    private var collectJob: Job? = null
+
+    private val connection = object : ServiceConnection {
+        override fun onServiceConnected(className: ComponentName, service: IBinder) {
+            val binder = service as TimerForegroundService.LocalBinder
+            val connectedService = binder.getService()
+            myService = connectedService
+            isBound = true
+
+            collectJob?.cancel()
+            collectJob = lifecycleScope.launch {
+                connectedService.getTimerFlow().collect { seconds ->
+                    _timerFlow.value = seconds
+                }
+            }
+        }
+
+        override fun onServiceDisconnected(arg0: ComponentName) {
+            isBound = false
+            myService = null
+            collectJob?.cancel()
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        val intent = Intent(this, TimerForegroundService::class.java)
+        bindService(intent, connection, Context.BIND_AUTO_CREATE)
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (isBound) {
+            unbindService(connection)
+            isBound = false
+        }
+        collectJob?.cancel()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             MaterialTheme {
                 Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    TimerScreen(modifier = Modifier.padding(innerPadding))
+                    TimerScreen(
+                        timerFlow = timerFlow,
+                        onStopServiceClick = {
+                            myService?.stopTimer()
+                            val intent = Intent(this, TimerForegroundService::class.java)
+                            stopService(intent)
+                        },
+                        modifier = Modifier.padding(innerPadding)
+                    )
                 }
             }
         }
@@ -46,8 +111,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-fun TimerScreen(modifier: Modifier = Modifier) {
+fun TimerScreen(
+    timerFlow: StateFlow<Int>,
+    onStopServiceClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
     val context = LocalContext.current
+
+    val seconds by timerFlow.collectAsStateWithLifecycle()
 
     var hasNotificationPermission by remember {
         mutableStateOf(
@@ -82,8 +153,17 @@ fun TimerScreen(modifier: Modifier = Modifier) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Foreground Service Таймер",
+            text = "Гібридний Таймер",
             style = MaterialTheme.typography.headlineSmall
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Text(
+            text = "$seconds с",
+            style = MaterialTheme.typography.displayLarge,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.primary
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -104,10 +184,7 @@ fun TimerScreen(modifier: Modifier = Modifier) {
         Spacer(modifier = Modifier.height(16.dp))
 
         Button(
-            onClick = {
-                val intent = Intent(context, TimerForegroundService::class.java)
-                context.stopService(intent)
-            },
+            onClick = onStopServiceClick,
             colors = ButtonDefaults.buttonColors(
                 containerColor = MaterialTheme.colorScheme.error
             ),
